@@ -14,9 +14,10 @@ var _ drpc.Conn = &Conn{}
 // Conn implements drpc.Conn using the yamux
 // multiplexer to allow concurrent RPCs
 type Conn struct {
-	conn   io.ReadWriteCloser
-	sess   *yamux.Session
-	closed chan struct{}
+	conn     io.ReadWriteCloser
+	sess     *yamux.Session
+	isClosed bool
+	closed   chan struct{}
 }
 
 // New returns a new multiplexed DRPC connection
@@ -36,13 +37,18 @@ func New(conn io.ReadWriteCloser) (*Conn, error) {
 // Close closes the multiplexer session
 // and the underlying connection.
 func (m *Conn) Close() error {
-	defer close(m.closed)
+	if !m.isClosed {
+		m.isClosed = true
+		defer close(m.closed)
 
-	err := m.sess.Close()
-	if err != nil {
-		return err
+		err := m.sess.Close()
+		if err != nil {
+			m.conn.Close()
+			return err
+		}
+		return m.conn.Close()
 	}
-	return m.conn.Close()
+	return nil
 }
 
 // Closed returns a channel that will be closed
