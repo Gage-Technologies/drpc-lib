@@ -3,6 +3,8 @@ package muxconn
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/sourcegraph/conc"
 	"io"
 
 	"github.com/hashicorp/yamux"
@@ -20,6 +22,7 @@ type Conn struct {
 	conn     io.ReadWriteCloser
 	sess     *yamux.Session
 	isClosed bool
+	wg       *conc.WaitGroup
 	closed   chan struct{}
 }
 
@@ -33,6 +36,7 @@ func New(conn io.ReadWriteCloser) (*Conn, error) {
 	return &Conn{
 		conn:   conn,
 		sess:   sess,
+		wg:     conc.NewWaitGroup(),
 		closed: make(chan struct{}),
 	}, nil
 }
@@ -47,9 +51,17 @@ func (m *Conn) Close() error {
 		err := m.sess.Close()
 		if err != nil {
 			m.conn.Close()
-			return err
+			return fmt.Errorf("failed to close internal session: %v", err)
 		}
-		return m.conn.Close()
+
+		err = m.conn.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close internal connection: %v", err)
+		}
+
+		// wait on the closure of all go routines
+		m.wg.Wait()
+		return nil
 	}
 	return nil
 }
@@ -68,7 +80,7 @@ func (m *Conn) Invoke(ctx context.Context, rpc string, enc drpc.Encoding, in, ou
 
 	conn, err := m.sess.Open()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open internal session: %v", err)
 	}
 	defer conn.Close()
 	dconn := drpcconn.New(conn)
@@ -84,24 +96,24 @@ func (m *Conn) NewStream(ctx context.Context, rpc string, enc drpc.Encoding) (dr
 
 	conn, err := m.sess.Open()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open internal session: %v", err)
 	}
 	dconn := drpcconn.New(conn)
 
-	go func() {
+	m.wg.Go(func() {
 		<-dconn.Closed()
 		conn.Close()
-	}()
+	})
 
 	s, err := dconn.NewStream(ctx, rpc, enc)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open internal stream: %v", err)
 	}
 
-	go func() {
+	m.wg.Go(func() {
 		<-s.Context().Done()
 		dconn.Close()
-	}()
+	})
 
 	return s, nil
 }
