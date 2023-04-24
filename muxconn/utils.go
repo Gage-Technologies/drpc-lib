@@ -25,6 +25,14 @@ func DialTlsProxy(target string, proxyURL *url.URL, tlsConfig *tls.Config) (net.
 		URL:    &url.URL{Opaque: target},
 		Header: make(http.Header),
 	}
+
+	// conditionally add auth to the proxy request
+	if proxyURL.User != nil {
+		username := proxyURL.User.Username()
+		password, _ := proxyURL.User.Password()
+		req.SetBasicAuth(username, password)
+	}
+
 	err = req.Write(proxyConn)
 	if err != nil {
 		_ = proxyConn.Close()
