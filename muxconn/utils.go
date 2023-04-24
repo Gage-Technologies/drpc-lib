@@ -3,6 +3,7 @@ package muxconn
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -30,7 +31,13 @@ func DialTlsProxy(target string, proxyURL *url.URL, tlsConfig *tls.Config) (net.
 	if proxyURL.User != nil {
 		username := proxyURL.User.Username()
 		password, _ := proxyURL.User.Password()
-		req.SetBasicAuth(username, password)
+		req.Header.Set(
+			"Proxy-Authorization",
+			fmt.Sprintf(
+				"Basic %s",
+				base64.StdEncoding.EncodeToString([]byte(username+":"+password)),
+			),
+		)
 	}
 
 	err = req.Write(proxyConn)

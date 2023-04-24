@@ -3,6 +3,7 @@ package muxconn
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -40,6 +41,23 @@ func TestDialTlsProxy(t *testing.T) {
 	// set up the proxy server
 	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
+			proxyAuth := r.Header.Get("Proxy-Authorization")
+			if proxyAuth == "" {
+				w.Header().Set("Proxy-Authenticate", `Basic realm="Restricted"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			buf, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(proxyAuth, "Basic "))
+			if err != nil {
+				http.Error(w, "Invalid proxy-authorization header", http.StatusBadGateway)
+				return
+			}
+			parts := strings.SplitN(string(buf), ":", 2)
+			if parts[0] != "user" || parts[1] != "pass" {
+				http.Error(w, "Invalid proxy-authorization header", http.StatusUnauthorized)
+				return
+			}
+
 			destConn, err := net.Dial("tcp", r.Host)
 			if err != nil {
 				http.Error(w, "Error connecting to target server", http.StatusBadGateway)
@@ -67,6 +85,7 @@ func TestDialTlsProxy(t *testing.T) {
 	defer proxyServer.Close()
 
 	proxyURL, _ := url.Parse(proxyServer.URL)
+	proxyURL.User = url.UserPassword("user", "pass")
 
 	// test the DialTlsProxy function
 	targetURL, err := url.Parse(targetServer.URL)
