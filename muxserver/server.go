@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/hashicorp/yamux"
 	"github.com/sourcegraph/conc"
+	"go.uber.org/zap"
 	"io"
 	"net"
 	"storj.io/drpc"
@@ -34,18 +35,12 @@ type Server struct {
 	wg     *conc.WaitGroup
 	mu     *sync.Mutex
 	active *atomic.Bool
+	logger *zap.Logger
 }
 
 // New returns a new multiplexed Server that serves handler
 func New(handler drpc.Handler) *Server {
-	active := &atomic.Bool{}
-	active.Store(false)
-	return &Server{
-		srv:    drpcserver.New(handler),
-		wg:     conc.NewWaitGroup(),
-		mu:     &sync.Mutex{},
-		active: active,
-	}
+	return NewWithOptions(handler, drpcserver.Options{})
 }
 
 // NewWithOptions
@@ -59,7 +54,13 @@ func NewWithOptions(handler drpc.Handler, opts drpcserver.Options) *Server {
 		wg:     conc.NewWaitGroup(),
 		mu:     &sync.Mutex{},
 		active: active,
+		logger: zap.NewNop(),
 	}
+}
+
+// SetLogger sets the logger for the server
+func (s *Server) SetLogger(logger *zap.Logger) {
+	s.logger = logger
 }
 
 // Close
@@ -98,13 +99,17 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			s.logger.Error("failed to accept connection", zap.Error(err))
 			return err
 		}
 
 		sess, err := yamux.Server(conn, nil)
 		if err != nil {
+			s.logger.Error("failed to create yamux server", zap.Error(err))
 			return err
 		}
+
+		s.logger.Info("new session established", zap.Stringer("remote_addr", conn.RemoteAddr()))
 
 		s.wg.Go(func() {
 			s.handleSession(ctx, sess)
@@ -116,14 +121,18 @@ func (s *Server) handleSession(ctx context.Context, sess *yamux.Session) {
 	for {
 		conn, err := sess.Accept()
 		if errors.Is(err, io.EOF) {
+			s.logger.Info("session closed on EOF")
 			break
 		} else if err != nil {
+			s.logger.Error("failed to accept connection in session", zap.Error(err))
 			continue
 		}
 
 		// retrieve the remote and local addresses and store them in the request context
 		ctx = context.WithValue(ctx, RemoteAddrKey, conn.RemoteAddr())
 		ctx = context.WithValue(ctx, LocalAddrKey, conn.LocalAddr())
+
+		s.logger.Debug("serving new connection", zap.Stringer("remote_addr", conn.RemoteAddr()))
 
 		s.wg.Go(func() {
 			s.srv.ServeOne(ctx, conn)
