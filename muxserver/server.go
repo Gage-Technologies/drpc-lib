@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hashicorp/yamux"
 	"github.com/sourcegraph/conc"
@@ -120,12 +121,32 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 func (s *Server) handleSession(ctx context.Context, sess *yamux.Session) {
+	errorWindow := make([]time.Time, 5)
+	errorIndex := 0
+	errorCount := 0
+
 	for {
 		conn, err := sess.Accept()
-		if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "connection reset by peer") {
+		if errors.Is(err, io.EOF) {
 			s.logger.Info("session closed on EOF")
 			break
 		} else if err != nil {
+			if strings.Contains(err.Error(), "connection reset by peer") {
+				now := time.Now()
+				if errorCount < 5 {
+					errorWindow[errorIndex] = now
+					errorCount++
+				} else {
+					if now.Sub(errorWindow[errorIndex]) < time.Second*10 {
+						s.logger.Warn("too many connection reset errors, closing session")
+						sess.Close()
+						break
+					}
+					errorWindow[errorIndex] = now
+				}
+				errorIndex = (errorIndex + 1) % 5
+				continue
+			}
 			s.logger.Error("failed to accept connection in session", zap.Error(err))
 			continue
 		}
