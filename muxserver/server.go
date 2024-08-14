@@ -3,15 +3,17 @@ package muxserver
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+
 	"github.com/hashicorp/yamux"
 	"github.com/sourcegraph/conc"
 	"go.uber.org/zap"
-	"io"
-	"net"
 	"storj.io/drpc"
 	"storj.io/drpc/drpcserver"
-	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -120,7 +122,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 func (s *Server) handleSession(ctx context.Context, sess *yamux.Session) {
 	for {
 		conn, err := sess.Accept()
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "connection reset by peer") {
 			s.logger.Info("session closed on EOF")
 			break
 		} else if err != nil {
