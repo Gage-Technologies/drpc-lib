@@ -131,25 +131,19 @@ func (s *Server) handleSession(ctx context.Context, sess *yamux.Session) {
 			s.logger.Info("session closed on EOF")
 			break
 		} else if err != nil {
-			if strings.Contains(err.Error(), "connection reset by peer") ||
-				strings.Contains(err.Error(), "keepalive timeout") ||
-				strings.Contains(err.Error(), "broken pipe") ||
-				strings.Contains(err.Error(), "invalid protocol version") {
-				now := time.Now()
-				if errorCount < 5 {
-					errorWindow[errorIndex] = now
-					errorCount++
-				} else {
-					if now.Sub(errorWindow[errorIndex]) < time.Second*10 {
-						s.logger.Warn("too many connection reset errors, closing session")
-						sess.Close()
-						break
-					}
-					errorWindow[errorIndex] = now
+			now := time.Now()
+			if errorCount < 5 {
+				errorWindow[errorIndex] = now
+				errorCount++
+			} else {
+				if now.Sub(errorWindow[errorIndex]) < time.Second*10 {
+					s.logger.Warn("too many errors in short time, closing session", zap.Error(err))
+					sess.Close()
+					break
 				}
-				errorIndex = (errorIndex + 1) % 5
-				continue
+				errorWindow[errorIndex] = now
 			}
+			errorIndex = (errorIndex + 1) % 5
 			s.logger.Error("failed to accept connection in session", zap.Error(err))
 			continue
 		}
