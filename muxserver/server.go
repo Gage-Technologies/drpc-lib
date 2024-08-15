@@ -131,7 +131,9 @@ func (s *Server) handleSession(ctx context.Context, sess *yamux.Session) {
 			s.logger.Info("session closed on EOF")
 			break
 		} else if err != nil {
-			if strings.Contains(err.Error(), "connection reset by peer") {
+			if strings.Contains(err.Error(), "connection reset by peer") ||
+				strings.Contains(err.Error(), "keepalive timeout") ||
+				strings.Contains(err.Error(), "broken pipe") {
 				now := time.Now()
 				if errorCount < 5 {
 					errorWindow[errorIndex] = now
